@@ -20,6 +20,7 @@
 
 #include "uv.h"
 #include "internal.h"
+#include "uv-common.h"
 
 #include <stddef.h> /* NULL */
 #include <stdio.h> /* printf */
@@ -94,6 +95,62 @@ STATIC_ASSERT(offsetof(uv_buf_t, len) == offsetof(struct iovec, iov_len));
 
 uint64_t uv_hrtime(void) {
   return uv__hrtime(UV_CLOCK_PRECISE);
+}
+
+int uv_flush_handle_sync(uv_loop_t* loop, int fd, int flags, size_t len) {
+  int r;
+  uv__io_t* w;
+  int found = 0;
+  struct iovec* iov;
+  QUEUE* q;
+  uv_write_t* req;
+  int iovcnt;
+  size_t n;
+
+
+  while (!QUEUE_EMPTY(&loop->watcher_queue)) {
+    q = QUEUE_HEAD(&loop->watcher_queue);
+    QUEUE_REMOVE(q);
+    QUEUE_INIT(q);
+
+    w = QUEUE_DATA(q, uv__io_t, watcher_queue);
+    assert(w->pevents != 0);
+    assert(w->fd >= 0);
+    assert(w->fd < (int) loop->nwatchers);
+
+    if (w->fd == fd) {
+      found = 1;
+      break;
+    }
+}
+
+if (found) {
+  uv_stream_t* stream = container_of(w, uv_stream_t, io_watcher);
+  assert(stream->type == UV_TCP ||
+         stream->type == UV_NAMED_PIPE ||
+         stream->type == UV_TTY);
+  assert(!(stream->flags & UV_HANDLE_CLOSING));
+  assert(uv__stream_fd(stream) >= 0);
+
+  r = uv__nonblock(fd, flags);
+  assert(r == 0);
+
+  while (!QUEUE_EMPTY(&stream->write_queue)) {
+    q = QUEUE_HEAD(&stream->write_queue);
+    QUEUE_REMOVE(q);
+    req = QUEUE_DATA(q, uv_write_t, queue);
+
+    assert(req->handle == stream);
+
+    assert(sizeof(uv_buf_t) == sizeof(struct iovec));
+    iov = (struct iovec*) &(req->bufs[req->write_index]);
+    iovcnt = req->nbufs - req->write_index;
+
+    n = writev(uv__stream_fd(stream), iov, iovcnt);
+  }
+  return 0;
+}
+return -1;
 }
 
 
